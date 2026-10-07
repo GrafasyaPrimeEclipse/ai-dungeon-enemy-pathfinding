@@ -1,0 +1,55 @@
+Kode Program Java (`Main.java`)
+
+```java :
+
+public class Main {
+
+    // Fungsi rekursif untuk menyelesaikan Menara Hanoi
+    public static void solveHanoi(int n, char asal, char bantu, char tujuan) {
+        if (n == 1) {
+            System.out.println("Pindahkan piringan 1 dari tiang " + asal + " ke tiang " + tujuan);
+            return;
+        }
+        
+        // Pindahkan n-1 piringan dari asal ke bantu
+        solveHanoi(n - 1, asal, tujuan, bantu);
+        
+        // Pindahkan piringan terbesar (n) dari asal ke tujuan
+        System.out.println("Pindahkan piringan " + n + " dari tiang " + asal + " ke tiang " + tujuan);
+        
+        // Pindahkan n-1 piringan dari bantu ke tujuan
+        solveHanoi(n - 1, bantu, asal, tujuan);
+    }
+
+    public static void main(String[] args) {
+        int jumlahPiringan = 4; // Jumlah piringan sesuai ilustrasi gambar
+        System.out.println("Langkah-langkah penyelesaian Menara Hanoi dengan " + jumlahPiringan + " piringan:\n");
+        solveHanoi(jumlahPiringan, 'A', 'B', 'C');
+    }
+}
+
+
+
+Penjelasan Program :
+
+Deskripsi Permasalahan
+Menara Hanoi adalah permainan teka-teki matematika di mana kita memiliki tiga tiang ( A, B , dan C) serta sejumlah piringan dengan ukuran berbeda. Tujuannya adalah memindahkan seluruh tumpukan piringan dari tiang awal (A) ke tiang tujuan (C) dengan aturan:
+
+1. Hanya satu piringan yang boleh dipindahkan dalam satu waktu.
+2. Setiap pemindahan terdiri dari mengambil piringan teratas dari salah satu tumpukan dan meletakkannya di atas tumpukan lain.
+3. Piringan yang lebih besar tidak boleh diletakkan di atas piringan yang lebih kecil.
+
+Logika Algoritma (Rekursi)
+
+Solusi ini dibuat menggunakan metode pendekatan rekursif (Divide and Conquer):
+
+* Base Case: Jika hanya ada 1 piringan (`n == 1`), langsung pindahkan piringan tersebut dari tiang `asal` ke tiang `tujuan`.
+* Recursive Case :
+1. Pindahkan n—1 piringan teratas dari tiang `asal` (A) ke tiang `bantu` (B) menggunakan tiang `tujuan` (C) sebagai bantuan sementara.
+2. Pindahkan piringan terbesar (piringan ke n) langsung dari tiang `asal` (A) ke tiang `tujuan` (C).
+3. Pindahkan n—1 piringan yang ada di tiang `bantu` (B) ke tiang `tujuan` (C) menggunakan tiang `asal` (A) sebagai bantuan sementara.
+
+
+
+Kompleksitas Waktu
+Jumlah total langkah minimum yang diperlukan untuk menyelesaikan n piringan adalah 2ⁿ — 1. Untuk 4 piringan, dibutuhkan tepat 15 langkah pemindahan. Kompleksitas waktunya adalah O(2ⁿ).
