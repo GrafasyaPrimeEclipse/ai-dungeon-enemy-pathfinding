@@ -1,0 +1,335 @@
+import random
+
+# ==============================================================================
+# DATA KONDISI LINGKUNGAN & STATUS NPC (SIMULATION STATE)
+# ==============================================================================
+class NPCState:
+    def __init__(self, hp, hunger, stamina, enemy_dist, resources):
+        self.hp = hp                  # 0 - 100
+        self.hunger = hunger          # 0 (kenyang) - 100 (kelaparan)
+        self.stamina = stamina        # 0 - 100
+        self.enemy_dist = enemy_dist  # jarak musuh dalam meter
+        self.resources = resources    # jumlah item/peluru/makanan (0 - 10)
+
+    def __str__(self):
+        return (f"[HP: {self.hp} | Lapar: {self.hunger} | Stamina: {self.stamina} | "
+                f"Jarak Musuh: {self.enemy_dist}m | Sumber Daya: {self.resources}]")
+
+
+# ==============================================================================
+# 1. DECISION TREE (Manual Hierarchical Rule-Based Tree)
+# ==============================================================================
+class DecisionNode:
+    def __init__(self, condition=None, true_branch=None, false_branch=None, action=None):
+        self.condition = condition        # Fungsi lambda yang mengembalikan True/False
+        self.true_branch = true_branch    # Node jika kondisi True
+        self.false_branch = false_branch  # Node jika kondisi False
+        self.action = action              # Leaf node (keputusan akhir)
+
+    def evaluate(self, state):
+        if self.action is not None:
+            return self.action
+        if self.condition(state):
+            return self.true_branch.evaluate(state)
+        else:
+            return self.false_branch.evaluate(state)
+
+def build_decision_tree():
+    # Leaf Nodes (Aksi Akhir)
+    act_flee = DecisionNode(action="KABUR & SEMBUNYI (Flee)")
+    act_heal = DecisionNode(action="GUNAKAN MEDKIT (Heal)")
+    act_fight = DecisionNode(action="SERANG MUSUH (Attack)")
+    act_eat = DecisionNode(action="MAKAN PERBEKALAN (Eat)")
+    act_scavenge = DecisionNode(action="CARI SUMBER DAYA (Scavenge)")
+    act_patrol = DecisionNode(action="PATROLI AREA AMAN (Patrol)")
+
+    # Sub-tree saat tidak ada musuh dekat
+    node_has_food = DecisionNode(
+        condition=lambda s: s.resources > 0,
+        true_branch=act_eat,
+        false_branch=act_scavenge
+    )
+    node_is_hungry = DecisionNode(
+        condition=lambda s: s.hunger > 60,
+        true_branch=node_has_food,
+        false_branch=act_patrol
+    )
+
+    # Sub-tree saat musuh berada dalam jarak berbahaya (< 15m)
+    node_can_heal = DecisionNode(
+        condition=lambda s: s.resources > 0 and s.stamina > 20,
+        true_branch=act_heal,
+        false_branch=act_flee
+    )
+    node_low_hp = DecisionNode(
+        condition=lambda s: s.hp < 40,
+        true_branch=node_can_heal,
+        false_branch=act_fight
+    )
+
+    # Root Node: Cek keberadaan musuh
+    root = DecisionNode(
+        condition=lambda s: s.enemy_dist < 15,
+        true_branch=node_low_hp,
+        false_branch=node_is_hungry
+    )
+    return root
+
+
+# ==============================================================================
+# 2. BEHAVIOUR TREE (Composite: Selector & Sequence, Condition, Action)
+# ==============================================================================
+class Status:
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    RUNNING = "RUNNING"
+
+class BTNode:
+    def tick(self, state):
+        raise NotImplementedError
+
+class Selector(BTNode):
+    """Menjalankan child berurutan hingga salah satu mengembalikan SUCCESS/RUNNING."""
+    def __init__(self, children):
+        self.children = children
+
+    def tick(self, state):
+        for child in self.children:
+            status = child.tick(state)
+            if status != Status.FAILURE:
+                return status
+        return Status.FAILURE
+
+class Sequence(BTNode):
+    """Menjalankan child berurutan selama semuanya mengembalikan SUCCESS."""
+    def __init__(self, children):
+        self.children = children
+
+    def tick(self, state):
+        for child in self.children:
+            status = child.tick(state)
+            if status != Status.SUCCESS:
+                return status
+        return Status.SUCCESS
+
+class ConditionNode(BTNode):
+    def __init__(self, func):
+        self.func = func
+
+    def tick(self, state):
+        return Status.SUCCESS if self.func(state) else Status.FAILURE
+
+class ActionNode(BTNode):
+    def __init__(self, name, action_func=None):
+        self.name = name
+        self.action_func = action_func
+
+    def tick(self, state):
+        if self.action_func:
+            self.action_func(state)
+        state.bt_decision = self.name
+        return Status.SUCCESS
+
+def build_behaviour_tree():
+    # Cabang 1: Bertahan hidup dari bahaya kritis (HP rendah + musuh dekat)
+    flee_sequence = Sequence([
+        ConditionNode(lambda s: s.enemy_dist < 15 and s.hp < 35),
+        ActionNode("Lari Menghindar dari Musuh (Evade)")
+    ])
+
+    # Cabang 2: Pertempuran taktis (Musuh dekat + punya sumber daya & stamina)
+    combat_sequence = Sequence([
+        ConditionNode(lambda s: s.enemy_dist < 15 and s.resources > 0 and s.stamina >= 30),
+        ActionNode("Menyerang Musuh dengan Senjata (Engage Combat)")
+    ])
+
+    # Cabang 3: Manajemen kebutuhan dasar (Lapar & punya stok makanan)
+    survival_eat_sequence = Sequence([
+        ConditionNode(lambda s: s.hunger >= 65 and s.resources > 0),
+        ActionNode("Berhenti Sejenak untuk Makan (Consume Ration)")
+    ])
+
+    # Cabang 4: Eksplorasi & Pengumpulan Sumber Daya (Default fallback)
+    gather_action = ActionNode("Menjelajah & Mengumpulkan Loot (Explore & Gather)")
+
+    return Selector([
+        flee_sequence,
+        combat_sequence,
+        survival_eat_sequence,
+        gather_action
+    ])
+
+
+# ==============================================================================
+# 3. FUZZY LOGIC (Fuzzification -> Rule Evaluation -> Defuzzification)
+# ==============================================================================
+class FuzzySurvivalAI:
+    @staticmethod
+    def trapmf(x, a, b, c, d):
+        """Fungsi keanggotaan Trapesium (Trapezoidal Membership Function)."""
+        if x <= a or x >= d:
+            return 0.0
+        elif b <= x <= c:
+            return 1.0
+        elif a < x < b:
+            return (x - a) / (b - a)
+        else:
+            return (d - x) / (d - c)
+
+    @staticmethod
+    def trimf(x, a, b, c):
+        """Fungsi keanggotaan Segitiga (Triangular Membership Function)."""
+        if x <= a or x >= c:
+            return 0.0
+        elif a < x <= b:
+            return (x - a) / (b - a)
+        else:
+            return (c - x) / (c - b)
+
+    def decide(self, state):
+        # 1. FUZZIFICATION
+        # Input 1: Bahaya berdasarkan jarak musuh (0 - 50 meter)
+        danger_high = self.trapmf(state.enemy_dist, -1, 0, 10, 20)
+        danger_med  = self.trimf(state.enemy_dist, 12, 25, 38)
+        danger_low  = self.trapmf(state.enemy_dist, 30, 40, 100, 101)
+
+        # Input 2: Kondisi fisik (HP 0 - 100)
+        hp_low  = self.trapmf(state.hp, -1, 0, 25, 45)
+        hp_high = self.trapmf(state.hp, 40, 65, 100, 101)
+
+        # Input 3: Tingkat Kelaparan (0 - 100)
+        hunger_high = self.trapmf(state.hunger, 50, 75, 100, 101)
+
+        # 2. RULE EVALUATION (Mamdani Min-Max Inference)
+        # Skor prioritas untuk 3 aksi utama: Bertahan/Kabur, Bertarung, Kumpul Sumber Daya
+        rule_retreat = max(
+            min(danger_high, hp_low),   # Bahaya tinggi DAN HP rendah -> Kabur
+            min(danger_med, hp_low)     # Bahaya sedang DAN HP rendah -> Kabur
+        )
+        rule_combat = min(danger_high, hp_high)  # Bahaya tinggi DAN HP tinggi -> Bertarung
+        rule_gather = max(
+            danger_low,                 # Bahaya rendah -> Aman cari sumber daya
+            min(danger_med, hunger_high) # Bahaya sedang TAPI sangat lapar -> Cari makan
+        )
+
+        # 3. DEFUZZIFICATION (Centroid Sederhana pada Skala Urgensi 0 - 100)
+        # Bobot centroid aksi: Retreat = 90, Combat = 55, Gather = 20
+        numerator = (rule_retreat * 90.0) + (rule_combat * 55.0) + (rule_gather * 20.0)
+        denominator = rule_retreat + rule_combat + rule_gather
+
+        crisp_score = numerator / denominator if denominator > 0 else 20.0
+
+        if crisp_score >= 70:
+            action = "EVAKUASI & PERTAHANAN PENUH (Retreat)"
+        elif crisp_score >= 42:
+            action = "SIAGA TEMPUR / SERANG TAKTIS (Engage)"
+        else:
+            action = "EKSPLORASI & CARI LOGISTIK (Scavenge)"
+
+        return f"{action} [Skor Urgensi Fuzzy: {crisp_score:.2f}/100]"
+
+
+# ==============================================================================
+# 4. MARKOV SYSTEMS (Markov Chain dengan Matriks Transisi Adaptif)
+# ==============================================================================
+class MarkovNPC:
+    def __init__(self):
+        self.states = ["PATROL", "SCAVENGE", "COMBAT", "FLEE"]
+        self.current_state = "PATROL"
+
+    def get_transition_probabilities(self, npc_state):
+        """
+        Menyesuaikan baris probabilitas matriks transisi berdasarkan kondisi
+        lingkungan permainan saat ini (Context-Aware Markov Chain).
+        """
+        # Kondisi Darurat: Musuh dekat dan HP kritis
+        if npc_state.enemy_dist < 15 and npc_state.hp < 35:
+            matrix = {
+                "PATROL":   [0.05, 0.05, 0.20, 0.70],
+                "SCAVENGE": [0.05, 0.05, 0.15, 0.75],
+                "COMBAT":   [0.00, 0.00, 0.25, 0.75],
+                "FLEE":     [0.10, 0.05, 0.05, 0.80],
+            }
+        # Kondisi Tempur: Musuh dekat tapi HP masih kuat
+        elif npc_state.enemy_dist < 15 and npc_state.hp >= 35:
+            matrix = {
+                "PATROL":   [0.10, 0.05, 0.75, 0.10],
+                "SCAVENGE": [0.05, 0.10, 0.70, 0.15],
+                "COMBAT":   [0.05, 0.05, 0.80, 0.10],
+                "FLEE":     [0.15, 0.10, 0.55, 0.20],
+            }
+        # Kondisi Lapar / Minim Sumber Daya & Aman dari musuh
+        elif npc_state.hunger > 60 or npc_state.resources <= 2:
+            matrix = {
+                "PATROL":   [0.25, 0.65, 0.05, 0.05],
+                "SCAVENGE": [0.20, 0.75, 0.03, 0.02],
+                "COMBAT":   [0.30, 0.60, 0.05, 0.05],
+                "FLEE":     [0.40, 0.50, 0.00, 0.10],
+            }
+        # Kondisi Normal & Aman
+        else:
+            matrix = {
+                "PATROL":   [0.65, 0.25, 0.05, 0.05],
+                "SCAVENGE": [0.55, 0.35, 0.05, 0.05],
+                "COMBAT":   [0.70, 0.20, 0.05, 0.05],
+                "FLEE":     [0.75, 0.15, 0.00, 0.10],
+            }
+        return matrix[self.current_state]
+
+    def step(self, npc_state):
+        probs = self.get_transition_probabilities(npc_state)
+        rand_val = random.random()
+        cumulative = 0.0
+        next_state = self.states[-1]
+
+        for state_name, prob in zip(self.states, probs):
+            cumulative += prob
+            if rand_val <= cumulative:
+                next_state = state_name
+                break
+
+        prev_state = self.current_state
+        self.current_state = next_state
+        return f"Transisi: {prev_state} -> {self.current_state} (Probabilitas: {probs})"
+
+
+# ==============================================================================
+# PENGUJIAN SIMULASI PERUBAHAN KONDISI PERMAINAN
+# ==============================================================================
+if __name__ == "__main__":
+    random.seed(42)
+
+    dt_root = build_decision_tree()
+    bt_root = build_behaviour_tree()
+    fuzzy_ai = FuzzySurvivalAI()
+    markov_ai = MarkovNPC()
+
+    scenarios = [
+        ("Skenario 1: Kondisi Awal Aman", NPCState(hp=90, hunger=20, stamina=85, enemy_dist=45, resources=5)),
+        ("Skenario 2: Mulai Lapar & Stok Menipis", NPCState(hp=85, hunger=75, stamina=60, enemy_dist=35, resources=1)),
+        ("Skenario 3: Disergap Musuh (HP Masih Kuat)", NPCState(hp=80, hunger=50, stamina=70, enemy_dist=8, resources=4)),
+        ("Skenario 4: Terluka Parah & Terpojok", NPCState(hp=25, hunger=80, stamina=15, enemy_dist=6, resources=0)),
+    ]
+
+    for title, state in scenarios:
+        print("=" * 75)
+        print(f"{title}\nStatus NPC: {state}")
+        print("-" * 75)
+
+        # 1. Decision Tree
+        dt_res = dt_root.evaluate(state)
+        print(f"1. Decision Tree  : {dt_res}")
+
+        # 2. Behaviour Tree
+        state.bt_decision = "Tidak ada aksi"
+        bt_root.tick(state)
+        print(f"2. Behaviour Tree : {state.bt_decision}")
+
+        # 3. Fuzzy Logic
+        fuzzy_res = fuzzy_ai.decide(state)
+        print(f"3. Fuzzy Logic    : {fuzzy_res}")
+
+        # 4. Markov Systems
+        markov_res = markov_ai.step(state)
+        print(f"4. Markov System  : {markov_res}")
+    print("=" * 75)
